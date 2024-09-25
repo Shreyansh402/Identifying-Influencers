@@ -2,7 +2,7 @@
 CXX = mpicxx
 
 # Compiler flags
-CXXFLAGS = -Wall -O2
+CXXFLAGS = -Wall -O3 -std=c++20
 
 # Target executable
 TARGET = 2021MT10230
