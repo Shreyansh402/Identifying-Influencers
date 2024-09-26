@@ -13,27 +13,33 @@
 
 using namespace std;
 
-#define N 475
-#define E 13289
-#define FILENAME "twitter.dat"
+// #define N 475
+// #define E 13289
+// #define FILENAME "twitter.dat"
 
-// #define N 6
-// #define E 10
-// #define FILENAME "sample.dat"
+// #define N 107614
+// #define E 13673453
+// #define FILENAME "gplus_combined.dat"
+
+#define N 6
+#define E 10
+#define FILENAME "sample.dat"
 
 // Directed Graph
 class Graph
 {
 public:
-    unordered_map<string, vector<string>> adj; // adjacency list
-    unordered_map<string, int> degree;         // indegree of each node
-    unordered_map<string, bool> visited;       // nodes assigned to this process and is it visited or not
+    unordered_map<string, vector<string>> adj;              // adjacency list
+    unordered_map<string, int> degree;                      // degree of each node
+    unordered_map<string, pair<double, double>> centrality; //  centrality score of each node
+    unordered_map<string, bool> visited;                    // nodes assigned to this process and is it visited or not
 
     Graph()
     {
         adj.reserve(N);
         degree.reserve(N);
         visited.reserve(N);
+        centrality.reserve(N);
     };
 
     void addEdge(string u, string v)
@@ -52,7 +58,76 @@ public:
     };
 };
 
-// Read input from file according to the rank of the process using MPI
+// Write the Degree Centrality of each node to a file
+void writeDegreeCentrality(Graph *local_graph, int rank, int size)
+{
+    // Collect data to write
+    stringstream ss;
+    for (auto &node : local_graph->visited)
+    {
+        ss << node.first << " " << local_graph->degree[node.first] << "\n";
+    }
+    string data_to_write = ss.str();
+    int data_size = data_to_write.size();
+
+    // Gather sizes of data to write from all processes
+    vector<int> all_data_sizes(size);
+    MPI_Gather(&data_size, 1, MPI_INT, all_data_sizes.data(), 1, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Calculate offsets
+    vector<int> offsets(size, 0);
+    if (rank == 0)
+    {
+        for (int i = 1; i < size; ++i)
+        {
+            offsets[i] = offsets[i - 1] + all_data_sizes[i - 1];
+        }
+    }
+
+    // Broadcast offsets to all processes
+    MPI_Bcast(offsets.data(), size, MPI_INT, 0, MPI_COMM_WORLD);
+
+    // Write data to file in parallel
+    MPI_File fh;
+    MPI_File_open(MPI_COMM_WORLD, "degree_centrality.txt", MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
+    MPI_File_write_at(fh, offsets[rank], data_to_write.c_str(), data_size, MPI_CHAR, MPI_STATUS_IGNORE);
+    MPI_File_close(&fh);
+}
+
+// Normalize the Degree Centrality of each node
+void normalizeDegreeCentrality(Graph *local_graph)
+{
+    // Find the maximum degree
+    int max_degree = 0;
+    for (auto &node : local_graph->visited)
+    {
+        max_degree = max(max_degree, local_graph->degree[node.first]);
+    }
+
+    // Find the global max degree across all processes
+    int global_max;
+    MPI_Allreduce(&max_degree, &global_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+
+    // Find the minimum degree
+    int min_degree = N;
+    for (auto &node : local_graph->visited)
+    {
+        min_degree = min(min_degree, local_graph->degree[node.first]);
+    }
+
+    // Find the global min degree across all processes
+    int global_min;
+    MPI_Allreduce(&min_degree, &global_min, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+
+    global_max = global_max - global_min;
+
+    for (auto &node : local_graph->visited)
+    {
+        local_graph->centrality[node.first].first = ((local_graph->degree[node.first] - global_min) / (double)global_max) * 0.6;
+    }
+}
+
+// Read input from file parallely and create the graph
 Graph *readFile(int rank, int size, Graph *local_graph)
 {
     MPI_File fh;
@@ -245,7 +320,15 @@ int main(int argc, char **argv)
     Graph *local_graph = new Graph();
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
+
+    // Read the file and create the graph
     Graph *complete_graph = readFile(rank, size, local_graph);
+
+    // write the degree of each node to degree_centrality.txt for root without using function for complete graph
+    writeDegreeCentrality(local_graph, rank, size);
+
+    // Normalize Degree cenrality
+    normalizeDegreeCentrality(local_graph);
 
     // end time
     MPI_Barrier(MPI_COMM_WORLD);
