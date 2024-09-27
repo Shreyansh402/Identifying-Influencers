@@ -138,27 +138,6 @@ Graph *readFile(int rank, int size, Graph *local_graph)
     MPI_Offset start = rank == 0 ? 0 : rank * segment + file_size % size;
     MPI_Offset end = (rank + 1) * segment + file_size % size;
 
-    // // Adjust start and end to read complete lines
-    // char c;
-    // if (rank > 0)
-    // {
-    //     MPI_File_read_at(fh, start, &c, 1, MPI_CHAR, MPI_STATUS_IGNORE);
-    //     while (c != '\n')
-    //     {
-    //         start++;
-    //         MPI_File_read_at(fh, start, &c, 1, MPI_CHAR, MPI_STATUS_IGNORE);
-    //     }
-    // }
-    // if (rank < size - 1)
-    // {
-    //     MPI_File_read_at(fh, end, &c, 1, MPI_CHAR, MPI_STATUS_IGNORE);
-    //     while (c != '\n')
-    //     {
-    //         end++;
-    //         MPI_File_read_at(fh, end, &c, 1, MPI_CHAR, MPI_STATUS_IGNORE);
-    //     }
-    // }
-
     char *buf = new char[end - start];
     MPI_File_read_at(fh, start, buf, end - start, MPI_CHAR, MPI_STATUS_IGNORE);
 
@@ -308,6 +287,186 @@ Graph *readFile(int rank, int size, Graph *local_graph)
     }
 
     return nullptr;
+}
+
+// Dijkstra's Algorithm to find the shortest path from source to all other nodes
+void dijkstra(Graph *local_graph, string source, int rank, int size)
+{
+    unordered_map<string, int> distance;
+    unordered_map<string, vector<string>> parent;
+    priority_queue<pair<int, string>, vector<pair<int, string>>, greater<pair<int, string>>> pq;
+
+    // update all the nodes connected to min_dist_node
+    if (local_graph->visited.find(source) != local_graph->visited.end())
+    {
+        distance[source] = 0;
+        local_graph->visited[source] = true;
+    }
+    for (auto &node : local_graph->adj[source])
+    {
+        if (local_graph->visited.find(node) != local_graph->visited.end())
+        {
+            distance[node] = 1;
+            pq.push({1, node});
+        }
+    }
+
+    // Dijkstra's Algorithm
+    while (1)
+    {
+        // Find the local node with the minimum distance
+        pair<int, string> min_dist_node = {INT_MAX, ""};
+        while (!pq.empty())
+        {
+            min_dist_node = pq.top();
+            pq.pop();
+            if (local_graph->visited[min_dist_node.second])
+            {
+                min_dist_node = {INT_MAX, ""};
+            }
+            else
+            {
+                break;
+            }
+        }
+
+        // Create a pair to hold the distance and the rank
+        pair<int, int> local_min_dist_node = {min_dist_node.first, rank};
+        pair<int, int> global_min_dist_node;
+
+        // Perform the reduction to find the global minimum distance node and the rank
+        MPI_Allreduce(&local_min_dist_node, &global_min_dist_node, 1, MPI_2INT, MPI_MINLOC, MPI_COMM_WORLD);
+
+        // If the global minimum distance node is infinity, then break
+        if (global_min_dist_node.first == INT_MAX)
+        {
+            break;
+        }
+
+        // check if our node was the global minimum distance node
+        if (global_min_dist_node.second == rank)
+        {
+            // Broadcast the node name to all processes as char *
+            int send_size = min_dist_node.second.size();
+            char min_dist_node_name[send_size + 1];
+            strcpy(min_dist_node_name, min_dist_node.second.c_str());
+            MPI_Bcast(min_dist_node_name, min_dist_node.second.size() + 1, MPI_CHAR, rank, MPI_COMM_WORLD);
+
+            // mark the node as visited
+            local_graph->visited[min_dist_node.second] = true;
+
+            // update all the nodes connected to min_dist_node
+            int new_dist = min_dist_node.first + 1;
+            for (auto &node : local_graph->adj[min_dist_node.second])
+            {
+                if (local_graph->visited.find(node) != local_graph->visited.end())
+                {
+                    if (new_dist < distance[node])
+                    {
+                        distance[node] = new_dist;
+                        pq.push({new_dist, node});
+                        parent[node].clear();
+                        parent[node].push_back(min_dist_node.second);
+                    }
+                    else if (new_dist == distance[node])
+                    {
+                        parent[node].push_back(min_dist_node.second);
+                    }
+                }
+            }
+        }
+        else
+        {
+            // Recieve the node name from the process with the global minimum distance node
+            char rec_buf[22];
+            MPI_Bcast(rec_buf, 22, MPI_CHAR, global_min_dist_node.second, MPI_COMM_WORLD);
+
+            // create string from char * with
+            string vis_node(rec_buf);
+
+            // add min_dist_node back into priority queue
+            pq.push(min_dist_node);
+
+            // update all the nodes connected to vis_node
+            int new_dist = global_min_dist_node.first + 1;
+            for (auto &node : local_graph->adj[vis_node])
+            {
+                if (local_graph->visited.find(node) != local_graph->visited.end())
+                {
+                    if (new_dist < distance[node])
+                    {
+                        distance[node] = new_dist;
+                        pq.push({new_dist, node});
+                        parent[node].clear();
+                        parent[node].push_back(vis_node);
+                    }
+                    else if (new_dist == distance[node])
+                    {
+                        parent[node].push_back(vis_node);
+                    }
+                }
+            }
+        }
+    }
+
+    // Send the parent map to the root process
+    if (rank == 0)
+    {
+        unordered_map<string, vector<string>> all_parent;
+        for (int i = 1; i < size; ++i)
+        {
+            int parent_size;
+            MPI_Recv(&parent_size, 1, MPI_INT, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+            char parent_buf[parent_size];
+            MPI_Recv(parent_buf, parent_size, MPI_CHAR, i, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+            istringstream parent_iss(string(parent_buf, parent_buf + parent_size));
+            string line;
+            while (getline(parent_iss, line))
+            {
+                istringstream lineStream(line);
+                string node;
+                vector<string> parents;
+                if (lineStream >> node)
+                {
+                    while (lineStream >> node)
+                    {
+                        parents.push_back(node);
+                    }
+                    all_parent[node] = parents;
+                }
+            }
+        }
+
+        // Print the shortest path from source to all other nodes
+        for (auto &node : all_parent)
+        {
+            cout << "Shortest path from " << source << " to " << node.first << " is: ";
+            for (auto &parent : node.second)
+            {
+                cout << parent << " -> ";
+            }
+            cout << node.first << endl;
+        }
+    }
+    else
+    {
+        // Send the parent map to the root process
+        stringstream ss;
+        for (auto &node : parent)
+        {
+            ss << node.first;
+            for (auto &p : node.second)
+            {
+                ss << " " << p;
+            }
+            ss << "\n";
+        }
+        string data_to_send = ss.str();
+        int data_size = data_to_send.size();
+        MPI_Send(&data_size, 1, MPI_INT, 0, 0, MPI_COMM_WORLD);
+        MPI_Send(data_to_send.c_str(), data_size, MPI_CHAR, 0, 0, MPI_COMM_WORLD);
+    }
 }
 
 int main(int argc, char **argv)
