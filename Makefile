@@ -1,5 +1,5 @@
 # Compiler
-CXX = mpicxx
+CXX = mpic++
 
 # Compiler flags
 CXXFLAGS = -Wall -O3 -std=c++20

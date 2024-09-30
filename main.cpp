@@ -6,9 +6,14 @@
 #include <mpi.h>
 #include <vector>
 #include <unordered_map>
+#include <cmath>
 #include <queue>
+#include <stack>
+#include <climits>
+#include <cstring>
 #include <unordered_set>
 #include <string>
+#include <algorithm>
 #include <sstream>
 #include <fstream>
 
@@ -141,7 +146,7 @@ void writeDegreeCentrality(Graph *local_graph, int rank, int size)
     // Write data to file in parallel
     MPI_File fh;
     MPI_File_open(MPI_COMM_WORLD, "degree_centrality.txt", MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
-    MPI_File_write_at(fh, offsets[rank], data_to_write.c_str(), data_size, MPI_CHAR, MPI_STATUS_IGNORE);
+    MPI_File_write_at_all(fh, offsets[rank], data_to_write.c_str(), data_size, MPI_CHAR, MPI_STATUS_IGNORE);
     MPI_File_close(&fh);
 }
 
@@ -177,7 +182,7 @@ void writeBetweennessCentrality(Graph *graph, int rank, int size)
     // Write data to file in parallel
     MPI_File fh;
     MPI_File_open(MPI_COMM_WORLD, "betweenness_centrality.txt", MPI_MODE_CREATE | MPI_MODE_WRONLY, MPI_INFO_NULL, &fh);
-    MPI_File_write_at(fh, offsets[rank], data_to_write.c_str(), data_size, MPI_CHAR, MPI_STATUS_IGNORE);
+    MPI_File_write_at_all(fh, offsets[rank], data_to_write.c_str(), data_size, MPI_CHAR, MPI_STATUS_IGNORE);
     MPI_File_close(&fh);
 }
 
@@ -237,6 +242,7 @@ void normalizeCentrality(Graph *local_graph)
 
     global_max_bc = global_max_bc - global_min_bc;
 
+    // Normalize the betweenness centrality and add it to the degree centrality to get the final centrality score
     for (auto &node : local_graph->visited)
     {
         local_graph->centrality[node.first].second = ((local_graph->centrality[node.first].second - global_min_bc) / global_max_bc) * 0.4 + local_graph->centrality[node.first].first;
@@ -379,133 +385,6 @@ Graph *readFile(int rank, int size)
         local_graph->visited[node] = false;
     }
     return local_graph;
-}
-
-// Read full input from file parallely and create the graph at every process
-Graph *readInput(int rank, int size)
-{
-    MPI_File fh;
-    MPI_File_open(MPI_COMM_WORLD, FILENAME, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
-    MPI_Offset file_size;
-    MPI_File_get_size(fh, &file_size);
-    char *buf = new char[file_size + 1];
-
-    // // Read the file in parallel in round robin fashion
-
-    // MPI_Offset segment = file_size / size;
-    // MPI_Offset start = rank == 0 ? 0 : rank * segment + file_size % size;
-    // MPI_Offset end = (rank + 1) * segment + file_size % size;
-    // int offset = 0;
-
-    // for (int i = 0; i < size; ++i)
-    // {
-    //     MPI_File_read_at_all(fh, start, buf + offset, end - start, MPI_CHAR, MPI_STATUS_IGNORE);
-    //     offset += end - start;
-    //     rank = (rank + 1) % size;
-    //     start = rank == 0 ? 0 : rank * segment + file_size % size;
-    //     end = (rank + 1) * segment + file_size % size;
-    // }
-
-    MPI_File_read_all(fh, buf, file_size, MPI_CHAR, MPI_STATUS_IGNORE);
-
-    MPI_File_close(&fh);
-
-    // Send raw data to root process
-    if (rank == 0)
-    {
-
-        // Process the collected data to create the graph
-        Graph *graph = new Graph();
-        vector<vector<char>> local_nodes(size);
-        unordered_map<string, int> node_to_rank;
-        node_to_rank.reserve(N);
-        int next_rank = 0;
-        istringstream iss(buf);
-        string line;
-        while (getline(iss, line))
-        {
-            istringstream lineStream(line);
-            string u, v;
-            if (lineStream >> u >> v)
-            {
-                graph->addEdge(u, v);
-                if (node_to_rank.find(v) == node_to_rank.end())
-                {
-                    node_to_rank[v] = next_rank;
-                    if (next_rank == 0)
-                    {
-                        graph->visited[v] = false;
-                    }
-                    else
-                    {
-                        // add v to the local nodes of the process
-                        local_nodes[next_rank].insert(local_nodes[next_rank].end(), v.begin(), v.end());
-                        local_nodes[next_rank].push_back('\n');
-                    }
-                    next_rank = (next_rank + 1) % size;
-                }
-                if (node_to_rank.find(u) == node_to_rank.end())
-                {
-                    node_to_rank[u] = next_rank;
-                    if (next_rank == 0)
-                    {
-                        graph->visited[u] = false;
-                    }
-                    else
-                    {
-                        // add v to the local nodes of the process
-                        local_nodes[next_rank].insert(local_nodes[next_rank].end(), u.begin(), u.end());
-                        local_nodes[next_rank].push_back('\n');
-                    }
-                    next_rank = (next_rank + 1) % size;
-                }
-            }
-        }
-
-        // Send data to the respective processes
-        for (int i = 1; i < size; ++i)
-        {
-            int send_size = local_nodes[i].size();
-            MPI_Send(&send_size, 1, MPI_INT, i, 0, MPI_COMM_WORLD);
-            MPI_Send(local_nodes[i].data(), local_nodes[i].size(), MPI_CHAR, i, 0, MPI_COMM_WORLD);
-        }
-
-        delete[] buf;
-
-        return graph;
-    }
-
-    // Process the collected data to create the graph
-    Graph *graph = new Graph();
-    istringstream iss(buf);
-    string line;
-    while (getline(iss, line))
-    {
-        istringstream lineStream(line);
-        string u, v;
-        if (lineStream >> u >> v)
-        {
-            graph->addEdge(u, v);
-        }
-    }
-
-    delete[] buf;
-
-    // Non-root processes receive their data from the root process
-    int recv_size;
-    MPI_Recv(&recv_size, 1, MPI_INT, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-    char recv_buffer[recv_size];
-    MPI_Recv(recv_buffer, recv_size, MPI_CHAR, 0, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
-
-    // change visited to false for all nodes
-    istringstream recv_nodes_iss(string(recv_buffer, recv_buffer + recv_size));
-    string node;
-    while (getline(recv_nodes_iss, node))
-    {
-        graph->visited[node] = false;
-    }
-
-    return graph;
 }
 
 // Dijkstra's Algorithm to find the shortest path from source to all other nodes
@@ -770,7 +649,7 @@ void BFS(Graph *graph, int rank, int size)
         MPI_Bcast(data_to_send_char, data_size, MPI_CHAR, 0, MPI_COMM_WORLD);
 
         vector<double> all_centrality(all_nodes.size());
-        for (int i = 0; i < all_nodes.size(); ++i)
+        for (size_t i = 0; i < all_nodes.size(); ++i)
         {
             all_centrality[i] = graph->centrality[all_nodes[i]].second;
         }
@@ -780,7 +659,7 @@ void BFS(Graph *graph, int rank, int size)
         MPI_Allreduce(all_centrality.data(), global_centrality.data(), all_nodes.size(), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
         // Update the centrality scores
-        for (int i = 0; i < all_nodes.size(); ++i)
+        for (size_t i = 0; i < all_nodes.size(); ++i)
         {
             if (graph->visited.find(all_nodes[i]) != graph->visited.end())
             {
@@ -803,7 +682,7 @@ void BFS(Graph *graph, int rank, int size)
             all_nodes.push_back(node);
         }
         vector<double> all_centrality(all_nodes.size());
-        for (int i = 0; i < all_nodes.size(); ++i)
+        for (size_t i = 0; i < all_nodes.size(); ++i)
         {
             all_centrality[i] = graph->centrality[all_nodes[i]].second;
         }
@@ -813,7 +692,7 @@ void BFS(Graph *graph, int rank, int size)
         MPI_Allreduce(all_centrality.data(), global_centrality.data(), all_nodes.size(), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
         // Update the centrality scores
-        for (int i = 0; i < all_nodes.size(); ++i)
+        for (size_t i = 0; i < all_nodes.size(); ++i)
         {
             if (graph->visited.find(all_nodes[i]) != graph->visited.end())
             {
@@ -857,7 +736,7 @@ void topKNodes(Graph *graph, int rank, int size, int k)
              }
              return a.score > b.score;
          });
-    if (localTopK.size() > k)
+    if (localTopK.size() > (size_t)k)
     {
         localTopK.resize(k);
     }
@@ -915,7 +794,6 @@ int main(int argc, char **argv)
     double start_time = MPI_Wtime();
 
     // Read the file and create the graph
-    // Graph *local_graph = readInput(rank, size);
     Graph *local_graph = readFile(rank, size);
 
     // write the degree of each node to degree_centrality.txt
@@ -938,7 +816,7 @@ int main(int argc, char **argv)
     double end_time = MPI_Wtime();
     if (rank == 0)
     {
-        cout << "Time taken: " << end_time - start_time << " seconds" << endl;
+        cout << "Time taken with " << size << " processors :" << end_time - start_time << " seconds" << endl;
     }
 
     MPI_Finalize();
