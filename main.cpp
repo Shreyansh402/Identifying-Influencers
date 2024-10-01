@@ -121,7 +121,7 @@ void writeDegreeCentrality(Graph *local_graph, int rank, int size)
     stringstream ss;
     for (auto &node : local_graph->visited)
     {
-        ss << node.first << " " << local_graph->degree[node.first] << "\n";
+        ss << node.first << " " << local_graph->centrality[node.first].first << "\n";
     }
     string data_to_write = ss.str();
     int data_size = data_to_write.size();
@@ -187,7 +187,7 @@ void writeBetweennessCentrality(Graph *graph, int rank, int size)
 }
 
 // Normalize the Centrality of each node
-void normalizeCentrality(Graph *local_graph)
+void normalizeCentrality(Graph *local_graph, int rank, int size)
 {
     // Find the maximum degree
     int max_degree = 0;
@@ -213,9 +213,11 @@ void normalizeCentrality(Graph *local_graph)
 
     global_max = global_max - global_min;
 
+    // Normalize the degree centrality
+
     for (auto &node : local_graph->visited)
     {
-        local_graph->centrality[node.first].first = ((local_graph->degree[node.first] - global_min) / (double)global_max) * 0.6;
+        local_graph->centrality[node.first].first = ((local_graph->degree[node.first] - global_min) / (double)global_max);
     }
 
     // Find the maximum betweenness centrality
@@ -242,10 +244,20 @@ void normalizeCentrality(Graph *local_graph)
 
     global_max_bc = global_max_bc - global_min_bc;
 
-    // Normalize the betweenness centrality and add it to the degree centrality to get the final centrality score
+    // Normalize the betweenness centrality
     for (auto &node : local_graph->visited)
     {
-        local_graph->centrality[node.first].second = ((local_graph->centrality[node.first].second - global_min_bc) / global_max_bc) * 0.4 + local_graph->centrality[node.first].first;
+        local_graph->centrality[node.first].second = ((local_graph->centrality[node.first].second - global_min_bc) / global_max_bc);
+    }
+
+    // Write the normalized centrality to file
+    writeDegreeCentrality(local_graph, rank, size);
+    writeBetweennessCentrality(local_graph, rank, size);
+
+    // Find the centrality score of each node
+    for (auto &node : local_graph->visited)
+    {
+        local_graph->centrality[node.first].second = local_graph->centrality[node.first].first * 0.6 + local_graph->centrality[node.first].second * 0.4;
     }
 }
 
@@ -658,13 +670,12 @@ void BFS(Graph *graph, int rank, int size)
         vector<double> global_centrality(all_nodes.size());
         MPI_Allreduce(all_centrality.data(), global_centrality.data(), all_nodes.size(), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
-        // Update the centrality scores
+        // Update the centrality
         for (size_t i = 0; i < all_nodes.size(); ++i)
         {
             if (graph->visited.find(all_nodes[i]) != graph->visited.end())
             {
-                graph->centrality[all_nodes[i]].second = global_centrality[i] / (N - 1);
-                graph->centrality[all_nodes[i]].second = graph->centrality[all_nodes[i]].second / (N - 2);
+                graph->centrality[all_nodes[i]].second = global_centrality[i];
             }
         }
     }
@@ -691,13 +702,12 @@ void BFS(Graph *graph, int rank, int size)
         vector<double> global_centrality(all_nodes.size());
         MPI_Allreduce(all_centrality.data(), global_centrality.data(), all_nodes.size(), MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
-        // Update the centrality scores
+        // Update the centrality
         for (size_t i = 0; i < all_nodes.size(); ++i)
         {
             if (graph->visited.find(all_nodes[i]) != graph->visited.end())
             {
-                graph->centrality[all_nodes[i]].second = global_centrality[i] / (N - 1);
-                graph->centrality[all_nodes[i]].second = graph->centrality[all_nodes[i]].second / (N - 2);
+                graph->centrality[all_nodes[i]].second = global_centrality[i];
             }
         }
     }
@@ -759,7 +769,7 @@ void topKNodes(Graph *graph, int rank, int size, int k)
     if (rank == 0)
     {
         // write the top k nodes to top_k_nodes.txt after opening the file or creating it if it doesn't exist
-        ofstream top_k_nodes("top_k_nodes.txt");
+        ofstream top_k_nodes("topk_nodes.txt");
         for (const auto &node : globalTopK)
         {
             top_k_nodes << node.name << endl;
@@ -796,17 +806,11 @@ int main(int argc, char **argv)
     // Read the file and create the graph
     Graph *local_graph = readFile(rank, size);
 
-    // write the degree of each node to degree_centrality.txt
-    writeDegreeCentrality(local_graph, rank, size);
-
     // Find betweenness centrality of each node
     BFS(local_graph, rank, size);
 
-    // Write the Betweenness Centrality of each node to betweenness_centrality.txt
-    writeBetweennessCentrality(local_graph, rank, size);
-
-    // Normalize cenrality and find the centrality score of each node
-    normalizeCentrality(local_graph);
+    // Normalize cenrality, write it into file and find the centrality score of each node
+    normalizeCentrality(local_graph, rank, size);
 
     // Find the top k nodes with the highest centrality score
     topKNodes(local_graph, rank, size, k);
