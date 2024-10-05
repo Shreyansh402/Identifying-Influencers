@@ -12,6 +12,7 @@
 #include <climits>
 #include <cstring>
 #include <unordered_set>
+#include <cstddef>
 #include <string>
 #include <algorithm>
 #include <sstream>
@@ -23,19 +24,15 @@ using namespace std;
 
 #define N 475
 #define E 13289
-#define FILENAME "twitter.dat"
 
 // #define N 107614
 // #define E 13673453
-// #define FILENAME "gplus_combined.dat"
 
 // #define N 7198
 // #define E 10000
-// #define FILENAME "gplus_short.dat"
 
 // #define N 6
 // #define E 10
-// #define FILENAME "sample.dat"
 
 // Directed Graph
 class Graph
@@ -262,10 +259,10 @@ void normalizeCentrality(Graph *local_graph, int rank, int size)
 }
 
 // Read input from file parallely and create the graph at root process
-Graph *readFile(int rank, int size)
+Graph *readFile(char *input_file_path, int rank, int size)
 {
     MPI_File fh;
-    MPI_File_open(MPI_COMM_WORLD, FILENAME, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
+    MPI_File_open(MPI_COMM_WORLD, input_file_path, MPI_MODE_RDONLY, MPI_INFO_NULL, &fh);
     MPI_Offset file_size;
     MPI_File_get_size(fh, &file_size);
     MPI_Offset segment = file_size / size;
@@ -714,7 +711,7 @@ void BFS(Graph *graph, int rank, int size)
 }
 
 // Find the top k nodes with the highest centrality score
-void topKNodes(Graph *graph, int rank, int size, int k)
+void topKNodes(Graph *graph, int rank, int size, int k, string output_folder_path)
 {
     // Create MPI datatype for NodeScore
     MPI_Datatype types[2] = {MPI_CHAR, MPI_DOUBLE};
@@ -731,8 +728,8 @@ void topKNodes(Graph *graph, int rank, int size, int k)
     {
         NodeScore ns;
         strncpy(ns.name, pair.first.c_str(), L - 1);
-        ns.name[L - 1] = '\0';                           // Ensure null-termination
-        ns.score = graph->centrality[pair.first].second; // Assuming .second is the normality score
+        ns.name[L - 1] = '\0';                                              // Ensure null-termination
+        ns.score = round(graph->centrality[pair.first].second * 1e5) / 1e5; // Assuming .second is the normality score
         localTopK.push_back(ns);
     }
 
@@ -769,7 +766,7 @@ void topKNodes(Graph *graph, int rank, int size, int k)
     if (rank == 0)
     {
         // write the top k nodes to top_k_nodes.txt after opening the file or creating it if it doesn't exist
-        ofstream top_k_nodes("topk_nodes.txt");
+        ofstream top_k_nodes(output_folder_path + "/topk_nodes.txt");
         for (const auto &node : globalTopK)
         {
             top_k_nodes << node.name << endl;
@@ -787,11 +784,11 @@ int main(int argc, char **argv)
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
     // Check if the correct number of arguments is provided
-    if (argc != 2)
+    if (argc != 4)
     {
         if (rank == 0)
         {
-            cerr << "Usage: " << argv[0] << " <k>" << endl;
+            cerr << "Usage: " << argv[0] << " <k> <input file path> <output folder path>" << endl;
         }
         MPI_Finalize();
         return 1;
@@ -799,12 +796,14 @@ int main(int argc, char **argv)
 
     // Parse the command-line argument
     int k = atoi(argv[1]);
+    char *input_file_path = argv[2];
+    string output_folder_path = argv[3];
 
     // start time
     double start_time = MPI_Wtime();
 
     // Read the file and create the graph
-    Graph *local_graph = readFile(rank, size);
+    Graph *local_graph = readFile(input_file_path, rank, size);
 
     // Find betweenness centrality of each node
     BFS(local_graph, rank, size);
@@ -813,7 +812,7 @@ int main(int argc, char **argv)
     normalizeCentrality(local_graph, rank, size);
 
     // Find the top k nodes with the highest centrality score
-    topKNodes(local_graph, rank, size, k);
+    topKNodes(local_graph, rank, size, k, output_folder_path);
 
     // end time
     MPI_Barrier(MPI_COMM_WORLD);
