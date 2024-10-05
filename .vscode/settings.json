@@ -4,5 +4,7 @@
         "vector": "cpp",
         "iostream": "cpp",
         "string": "cpp"
-    }
+    },
+    "C_Cpp.default.compilerPath": "/usr/bin/g++",
+    "C_Cpp.errorSquiggles": "enabled"
 }
