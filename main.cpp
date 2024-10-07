@@ -23,16 +23,13 @@ using namespace std;
 #define L 23
 
 #define N 475
-#define E 13289
+#define E 13289 // Twitter
 
 // #define N 107614
-// #define E 13673453
-
-// #define N 7198
-// #define E 10000
+// #define E 13673453 // Gplus_combined
 
 // #define N 6
-// #define E 10
+// #define E 10 // Sample
 
 // Directed Graph
 class Graph
@@ -54,14 +51,6 @@ public:
     void addEdge(string u, string v)
     {
         adj[u].push_back(v);
-        // if (degree.find(v) == degree.end())
-        // {
-        //     degree[v] = 0;
-        // }
-        // if (degree.find(u) == degree.end())
-        // {
-        //     degree[u] = 0;
-        // }
         degree[v]++;
         degree[u]++;
     };
@@ -799,9 +788,6 @@ int main(int argc, char **argv)
     char *input_file_path = argv[2];
     string output_folder_path = argv[3];
 
-    // start time
-    double start_time = MPI_Wtime();
-
     // Read the file and create the graph
     Graph *local_graph = readFile(input_file_path, rank, size);
 
@@ -813,14 +799,6 @@ int main(int argc, char **argv)
 
     // Find the top k nodes with the highest centrality score
     topKNodes(local_graph, rank, size, k, output_folder_path);
-
-    // end time
-    MPI_Barrier(MPI_COMM_WORLD);
-    double end_time = MPI_Wtime();
-    if (rank == 0)
-    {
-        cout << "Time taken with " << size << " processors :" << end_time - start_time << " seconds" << endl;
-    }
 
     MPI_Finalize();
     return 0;
